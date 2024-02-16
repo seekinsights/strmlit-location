@@ -190,9 +190,6 @@ def execute():
     ###########
     if len(zipcode)==5:
         match = True
-    else:
-        for each in result[0]['address_components']:
-            st.write(each)
     ############
     return
 with st.sidebar:
