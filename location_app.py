@@ -74,8 +74,11 @@ class locations():
             if c == 'ETHNIC_GROUP':
                 people.append('have a ' + s.capitalize() + ' background')
             if c == 'AGE_GROUP':
-                _, _, start, end = s.split('_')
-                people.append('be part of age group ' + start + ' to ' + end)
+                try:
+                    _, _, start, end = s.split('_')
+                    people.append('be part of age group ' + start + ' to ' + end)
+                except:
+                    pass
             if c == 'NET_WORTH':
                 people.append('have a ' + s.lower())
             if c == 'INCOME':
@@ -174,7 +177,7 @@ def upcoming_weather():
     st.altair_chart(points + error_bars  ,use_container_width=True)
     return
 def execute():
-
+    st.session_state['is_expanded'] = False
     if len(st.session_state['address'])<1:
         initial = locations(fine_granularity=False)
     else:
@@ -192,7 +195,10 @@ def execute():
         match = True
     ############
     return
-with st.sidebar:
+if 'is_expanded' not in st.session_state:
+    st.session_state['is_expanded'] = True
+exp_form = st.expander('Submit a location',expanded=st.session_state['is_expanded'])
+with exp_form:
     col1, col2, col3 = st.columns([.25,.5,.25])
 
     with col1:
