@@ -4,6 +4,9 @@ import pandas as pd
 import googlemaps
 import altair as alt
 from snowflake.snowpark import functions as F
+import uuid
+from streamlit_searchbox import st_searchbox
+from typing import Any, List
 
 #st.set_page_config(layout="wide")
 # Initialize connection.
@@ -22,7 +25,6 @@ forecast_df = load_weather()
 class locations():
     def __init__(self,fine_granularity):
         self.granularity=fine_granularity
-        #if self.granularity == True:
         self.gdf_all_loc = gpd.read_parquet('static_files/geo_census_tr.parquet')
 
     def with_gmaps(self,query):
@@ -39,6 +41,8 @@ class locations():
         self.main_cluster = int(self.gdf_loc['Cluster'].iloc[0])
         self.main_name = str(self.gdf_loc['name'].iloc[0])
         self.data_read()
+        st.session_state['zip_code']=int(self.gdf_loc['ZIP_CODE'].iloc[0])
+
         return
 
     def data_read(self):
@@ -85,7 +89,7 @@ class locations():
                 people.append('have an ' + s.lower())
             if c == 'EDUCATION':
                 people.append('have an education at ' + s + ' level')
-        self.people_summary = f'''The people here are more likely to than most areas to {people[0]}, {people[1]}, {people[2]}, and {people[4]}.'''
+        self.people_summary = f'''The people here are more likely than those in most areas to {people[0]}, {people[1]}, {people[2]}, and {people[4]}.'''
         self.top_q_type = self.qloo_loc[self.qloo_loc['LOCAL_RANK']==1].SUBTYPE.iloc[0]
         self.top_q_name = self.qloo_loc[self.qloo_loc['LOCAL_RANK']==1].NAME.iloc[0]
         m_text = f"has a high affinity for the {self.top_q_type} :blue[{self.top_q_name}]"
@@ -99,7 +103,8 @@ class locations():
     def add_metric(self,label,value):
         st.metric(label=label, value=value)
         return
-
+    def aff_frame(self):
+        return st.dataframe(self.qloo_loc[['NAME','LOCAL_RANK','SUBTYPE']].sort_values(by='LOCAL_RANK', ascending=True).head(5), use_container_width=True)
     def bubble(self):
 
         return alt.Chart(self.qloo_loc, title='Top Cultural Affinities').mark_circle().encode(
@@ -119,35 +124,38 @@ def create_layout(location_instance):
     location_instance.new_summary(f'''Hi, were you looking for me? I'm {location_instance.main_name}, and I live really close to
       {st.session_state['f_address']}! I'm personally a little obsessed with {location_instance.top_q_name}, which might be
     unusual if you aren't from around here. {location_instance.people_summary}''')
-    tab1, tab2,tab3 = st.tabs(["Location Overview", "Location Analysis",'Find Others'])
-    with tab1:
-        mcol1, mcol2,mcol3 = st.columns(3,gap='medium')
-        with mcol1:
-            location_instance.add_metric('Households with Children (%)',round(100*location_instance.eps_w_main['CHILDREN_HH'].iloc[0],2))
-        with mcol2:
-            location_instance.add_metric('Households Married (%)',round(100*location_instance.eps_w_main['MARRIAGE'].iloc[0],2))
-        with mcol3:
-            location_instance.add_metric('Adults, Women (%)',round(100*location_instance.eps_w_main['WOMEN'].iloc[0],2))
-        st.divider()
-        mcol4, mcol5, mcol6 = st.columns(3, gap='medium')
-        with mcol4:
-            location_instance.add_metric('Average Time in Residence',round(location_instance.eps_w_main['LENGTH_RESIDENCE'].iloc[0],2))
-        with mcol5:
-            location_instance.add_metric('Average Adult Age',round(location_instance.eps_w_main['AGE'].iloc[0],2))
-        with mcol6:
-            location_instance.add_metric('Average Household Size',round(location_instance.eps_w_main['HOUSEHOLD_SIZE'].iloc[0],1))
-    #    st.divider()
-        exp_map = st.expander('On a map',expanded=True)
-        with exp_map:
-            exp_col1,exp_col2 = st.columns(2,gap='small')
-            exp_col1.map(location_instance.map_data, zoom=10, use_container_width=True)
-            with exp_col2:
-                upcoming_weather()
-  #
-        st.write('Local Cultural Affinities')
-        st.altair_chart(location_instance.bubble(),use_container_width=True)
+    st.divider()
+    mcol1, mcol2,mcol3 = st.columns(3,gap='medium')
+    with mcol1:
+        location_instance.add_metric('Households with Children (%)',round(100*location_instance.eps_w_main['CHILDREN_HH'].iloc[0],2))
+    with mcol2:
+        location_instance.add_metric('Households Married (%)',round(100*location_instance.eps_w_main['MARRIAGE'].iloc[0],2))
+    with mcol3:
+        location_instance.add_metric('Adults, Women (%)',round(100*location_instance.eps_w_main['WOMEN'].iloc[0],2))
+    st.divider()
+    mcol4, mcol5, mcol6 = st.columns(3, gap='medium')
+    with mcol4:
+        location_instance.add_metric('Average Time in Residence',round(location_instance.eps_w_main['LENGTH_RESIDENCE'].iloc[0],2))
+    with mcol5:
+        location_instance.add_metric('Average Adult Age',round(location_instance.eps_w_main['AGE'].iloc[0],2))
+    with mcol6:
+        location_instance.add_metric('Average Household Size',round(location_instance.eps_w_main['HOUSEHOLD_SIZE'].iloc[0],1))
+    st.divider()
+    st.write('Local Cultural Affinities')
+    location_instance.aff_frame()
+    exp_map = st.expander('On a map',expanded=True)
+    with exp_map:
+        exp_col1,exp_col2 = st.columns(2,gap='small')
+        exp_col1.map(location_instance.map_data, zoom=10, use_container_width=True)
+        with exp_col2:
+            upcoming_weather()
+#
+    st.subheader('Where else can I find more people like ' + location_instance.main_name + '?')
+    st.divider()
+    st.altair_chart(location_instance.map_clusters(), use_container_width=True)
 
-    with tab2:
+    exp_details = st.expander('Dive Deeper', expanded=False)
+    with exp_details:
         range_ = ['#d4322c', "#f78d53", "#fed183", "#f9f7ae", "#cae986", "#84ca68", "#22964f"]
         domain = ['Extremely Low', 'Atypically Low', 'Low Average', 'Average', 'High Average', 'Atypically High',
                   'Extremely High']
@@ -158,11 +166,6 @@ def create_layout(location_instance):
                                                                                  legend=alt.Legend(orient="top",title=None)),
             facet=alt.Facet('CATEGORY',columns=3)
         ).resolve_scale(x='independent'),use_container_width=False)
-
-    with tab3:
-        st.subheader('Where else can I find more people like '+location_instance.main_name+'?')
-        st.divider()
-        st.altair_chart(location_instance.map_clusters(),use_container_width=True)
 
 
 def upcoming_weather():
@@ -178,27 +181,37 @@ def upcoming_weather():
     return
 def execute():
     st.session_state['is_expanded'] = False
-    if len(st.session_state['address'])<1:
-        initial = locations(fine_granularity=False)
-    else:
-        initial = locations(fine_granularity=True)
-    result = initial.with_gmaps(st.session_state['address']+', '+st.session_state['city']+', '+st.session_state['state']+' '+st.session_state['zipcode'])
+    initial = locations(fine_granularity=True)
+    result = initial.with_gmaps(st.session_state['address'])
     location = result[0]['geometry']['location']
     initial.connect(pd.DataFrame({'lat': [location['lat']], 'lon': [location['lng']]}))
     st.session_state['f_address'] = result[0]['formatted_address']
-   # st.subheader('Your location: '+result[0]['formatted_address'])
-   # st.markdown(initial.top_text())
+   # st.write(result[0]['formatted_address'])
+    st.session_state['zipcode'] = result[0]['formatted_address'].split(',')[-2].split(' ')[-1]
 
+   # st.markdown(initial.top_text())
+    container1 = st.container()
     create_layout(initial)
-    ###########
-    if len(zipcode)==5:
-        match = True
-    ############
+
     return
+def search_address(searchaddress):
+
+    if not searchaddress:
+        return ['No results']
+    map_client = googlemaps.Client(key=st.secrets.gconnect.mkey)
+    result = map_client.places_autocomplete(input_text=searchaddress, components={'country': 'US'},
+                                            session_token=uuid.uuid4())
+
+    return [(x['description'], x['description']) for x in result]
+linkcol1, linkcol2 = st.columns([.7, .3])
+with linkcol2:
+    st.page_link('https://seekinsights.com/', label='https://seekinsights.com/',
+                 icon=None, disabled=False, use_container_width=True)
 if 'is_expanded' not in st.session_state:
     st.session_state['is_expanded'] = True
-exp_form = st.expander('Submit a location',expanded=st.session_state['is_expanded'])
-with exp_form:
+top_container = st.container()
+with top_container:
+    st.subheader('Understand a Location')
     col1, col2, col3 = st.columns([.25,.5,.25])
 
     with col1:
@@ -208,9 +221,17 @@ with exp_form:
     with col3:
         st.write(' ')
 
-    with st.form(key="address_form", clear_on_submit=True):
-        address = st.text_input("Address", key="address")
-        city = st.text_input("City", key="city")
-        state = st.text_input("State", key="state")
-        zipcode = st.text_input('Zip',key='zipcode')
-        submit_status = st.form_submit_button("Get Location Details!", on_click=execute)
+    selected_value = st_searchbox(**dict(
+    search_function=search_address,
+    placeholder="Address",
+    label=None,
+    default="Address",
+    clear_on_submit=True,
+    key="searchbox"))
+
+    if selected_value:
+        st.info(f"{selected_value}")
+        st.session_state['address']=selected_value
+
+execute()
+
