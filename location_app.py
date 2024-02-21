@@ -185,13 +185,14 @@ def execute():
     result = initial.with_gmaps(st.session_state['address'])
     location = result[0]['geometry']['location']
     initial.connect(pd.DataFrame({'lat': [location['lat']], 'lon': [location['lng']]}))
-    st.session_state['f_address'] = result[0]['formatted_address']
-   # st.write(result[0]['formatted_address'])
-    st.session_state['zipcode'] = result[0]['formatted_address'].split(',')[-2].split(' ')[-1]
+    try:
+        st.session_state['f_address'] = result[0]['formatted_address']
+       # st.write(result[0]['formatted_address'])
+        st.session_state['zipcode'] = result[0]['formatted_address'].split(',')[-2].split(' ')[-1]
 
-   # st.markdown(initial.top_text())
-    container1 = st.container()
-    create_layout(initial)
+        create_layout(initial)
+    except:
+        pass
 
     return
 def search_address(searchaddress):
@@ -223,9 +224,9 @@ with top_container:
 
     selected_value = st_searchbox(**dict(
     search_function=search_address,
-    placeholder="Address",
+    placeholder="Enter an Address Here",
     label=None,
-    default="Address",
+    default="Selected",
     clear_on_submit=True,
     key="searchbox"))
 
@@ -233,5 +234,5 @@ with top_container:
         st.info(f"{selected_value}")
         st.session_state['address']=selected_value
 
-execute()
+        execute()
 
