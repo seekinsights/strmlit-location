@@ -6,11 +6,13 @@ import altair as alt
 from snowflake.snowpark import functions as F
 import uuid
 from streamlit_searchbox import st_searchbox
-from typing import Any, List
 
-#st.set_page_config(layout="wide")
-# Initialize connection.
 conn = st.connection("snowflake",ttl=3600*3)
+
+@st.cache_data(ttl=3600*6)
+def load_geo():
+    gdf_all_loc = gpd.read_parquet('static_files/geo_census_tr.parquet')
+    return gdf_all_loc
 
 @st.cache_data(ttl=3600*6)
 def load_weather():
@@ -20,12 +22,18 @@ def load_weather():
     forecast = forecast.merge(desc, on=['WX_DESCRIPTION'])
     return forecast
 
+@st.cache_data(ttl=3600*6)
+def load_nn():
+    nn = pd.read_parquet('static_files/nn_with_local.parquet')
+    return nn
+
+gdf_all_loc = load_geo()
 forecast_df = load_weather()
+nn_df = load_nn()
 
 class locations():
     def __init__(self,fine_granularity):
         self.granularity=fine_granularity
-        self.gdf_all_loc = gpd.read_parquet('static_files/geo_census_tr.parquet')
 
     def with_gmaps(self,query):
         self.map_client = googlemaps.Client(key=st.secrets.gconnect.mkey)
@@ -36,7 +44,7 @@ class locations():
 
         self.map_data = map_data
         gdf_loc = gpd.GeoDataFrame(map_data,geometry=gpd.points_from_xy(map_data.lon, map_data.lat), crs="EPSG:4326" )
-        self.gdf_loc = gdf_loc.sjoin_nearest(self.gdf_all_loc,max_distance=100)
+        self.gdf_loc = gdf_loc.sjoin_nearest(gdf_all_loc,max_distance=100)
         self.main_id = int(self.gdf_loc['GEOID'].iloc[0])
         self.main_cluster = int(self.gdf_loc['Cluster'].iloc[0])
         self.main_name = str(self.gdf_loc['name'].iloc[0])
@@ -51,7 +59,7 @@ class locations():
                           .filter(F.col('GEOID') == self.main_id).to_pandas()
 
         self.eps_w_main = session.table("seek_solutions.beth_sandbox.ct_wide")\
-                          .filter(F.col('GEOID') == self.main_id).to_pandas().merge(pd.DataFrame(self.gdf_all_loc.drop(columns='geometry')),
+                          .filter(F.col('GEOID') == self.main_id).to_pandas().merge(pd.DataFrame(gdf_all_loc.drop(columns='geometry')),
                                                     on=['GEOID'])
 
         self.ep_rank_main = session.table("seek_solutions.beth_sandbox.ct_rnks")\
@@ -62,49 +70,75 @@ class locations():
                                              'AVE_SUMMER_LOW','SUMMER_PRECIPITATION','AVE_FALL_HIGH','AVE_FALL_LOW',
                                              'FALL_PRECIPITATION']]
 
+        self.main_nn = nn_df[nn_df['GID']==self.main_id]
         return
 
     def top_text(self):
         f1 = self.ep_rank_main[self.ep_rank_main['CATEGORY_OUTLIER_RANK'] == 1].sort_values('OUTLIER_SCORE',
                                                             ascending=False).iloc[:10][['CATEGORY', 'SUBCATEGORY']]
-        people = []
+        self.people = []
         for c, s in f1.values:
             if c == 'LANGUAGE':
-                people.append('speak' + s.split('-')[1])
+                self.people.append('Speak' + s.split('-')[1])
             if c == 'RELIGION':
-                people.append('identify as ' + s.capitalize())
+                self.people.append('Identify as ' + s.capitalize())
             if c == 'DWELLING_TYPE':
-                people.append('live in a ' + s.lower().replace('_', ' '))
+                self.people.append('Live in ' + s.lower().split('_')[-1]+' classified housing')
             if c == 'ETHNIC_GROUP':
-                people.append('have a ' + s.capitalize() + ' background')
+                self.people.append('Have a ' + s.capitalize() + ' background')
             if c == 'AGE_GROUP':
                 try:
                     _, _, start, end = s.split('_')
-                    people.append('be part of age group ' + start + ' to ' + end)
+                    if end == '25':
+                        self.people.append('Be part of the under 25 age group')
+                    else:
+                        self.people.append('Be part of the age group ' + start + ' to ' + end)
                 except:
-                    pass
+                    self.people.append('Be part of the age group 65 and up')
             if c == 'NET_WORTH':
-                people.append('have a ' + s.lower())
+                self.people.append('Have a ' + s.lower())
             if c == 'INCOME':
-                people.append('have an ' + s.lower())
+                self.people.append('Have an ' + s.lower())
             if c == 'EDUCATION':
-                people.append('have an education at ' + s + ' level')
-        self.people_summary = f'''The people here are more likely than those in most areas to {people[0]}, {people[1]}, {people[2]}, and {people[4]}.'''
+                self.people.append('Have an education at ' + s + ' level')
+
         self.top_q_type = self.qloo_loc[self.qloo_loc['LOCAL_RANK']==1].SUBTYPE.iloc[0]
         self.top_q_name = self.qloo_loc[self.qloo_loc['LOCAL_RANK']==1].NAME.iloc[0]
         m_text = f"has a high affinity for the {self.top_q_type} :blue[{self.top_q_name}]"
         return m_text
 
     def new_summary(self,text):
-        st.markdown(f'<p style="background-color:#1A237E;color:#FFFFFF;font-size:20px;border-radius:2%;">{text}</p>',
+        st.markdown(f'<p style="background-color:#1A237E;color:#FFFFFF;font-size:20px;border-radius:4%;">{text}</p>',
                     unsafe_allow_html=True)
         return
 
+    def bullets(self):
+        for i in range(3):
+            st.markdown(f"- {self.people[i]}")
+
+        st.markdown('''
+            <style>
+            [data-testid="stMarkdownContainer"] li{
+                list-style-position: inside;
+                background-color:#FFFFFF;color:black;
+            }
+            </style>
+            ''', unsafe_allow_html=True)
+
+         #   st.write(f'<p style="background-color:#1A237E;color:#FFFFFF;font-size:20px;border-radius:4%;"* {summary_bullets[0]}</p>',
+         #           unsafe_allow_html=True)
+        return
     def add_metric(self,label,value):
+
         st.metric(label=label, value=value)
         return
+
     def aff_frame(self):
-        return st.dataframe(self.qloo_loc[['NAME','LOCAL_RANK','SUBTYPE']].sort_values(by='LOCAL_RANK', ascending=True).head(5), use_container_width=True)
+        aff_df = self.qloo_loc[['NAME','LOCAL_RANK','SUBTYPE']].drop_duplicates(['NAME'])
+        aff_df['LOCAL_RANK']=aff_df['LOCAL_RANK'].rank(ascending=True)
+        aff_df = aff_df.sort_values(by='LOCAL_RANK', ascending=True).head(5)
+        return st.dataframe(aff_df, use_container_width=True,hide_index=True)
+
     def bubble(self):
 
         return alt.Chart(self.qloo_loc, title='Top Cultural Affinities').mark_circle().encode(
@@ -113,17 +147,61 @@ class locations():
             color=alt.Color('SUBTYPE',legend=alt.Legend(orient="bottom")
         ))
     def map_clusters(self):
-        d = self.gdf_all_loc[self.gdf_all_loc['Cluster']==self.main_cluster][['INTPTLONG','INTPTLAT','Cluster','ZIP_CODE']]
-        return alt.Chart(d,title='Related Locations',
-                         ).mark_circle().encode(longitude='INTPTLONG',latitude='INTPTLAT',tooltip=['ZIP_CODE:N']
-           ).project( "albersUsa" )#.properties(width=800,height=800)
+        d = gdf_all_loc[gdf_all_loc['Cluster']==self.main_cluster][['INTPTLONG','INTPTLAT','Cluster','GEOID','ZIP_CODE']]
+        d = d.merge(self.main_nn[['GID','RANK','LOCALITY','STATE']],left_on='GEOID',right_on='GID',how='outer')
+        d['most_similar_locations']=pd.notnull(d['RANK']).astype('int')
+        cluster_data = d[d['most_similar_locations']==0]
+        cluster_points = alt.Chart(cluster_data,title='Related Locations').mark_circle( color="#5885AF"
+                ).encode(longitude='INTPTLONG',latitude='INTPTLAT').project( "albersUsa" )
+        sim_data = d[d['most_similar_locations']==1]
+        sim_points = alt.Chart(sim_data).mark_circle(color='#d4322c'
+                ).encode(longitude='INTPTLONG',latitude='INTPTLAT',
+                        )
 
+        st.altair_chart(cluster_points +sim_points, use_container_width=True)
+        st.write('Highest similarity shown in red')
+        d = d.drop_duplicates(['LOCALITY','STATE','Cluster'])
+        d['RANK']=d['RANK'].rank(ascending=True)
+        d = d[['LOCALITY','STATE','RANK','ZIP_CODE']]
+        st.divider()
+        st.write('Most Similar Location Details')
+        st.dataframe(d[d['RANK']<=10],use_container_width=True,hide_index=True)
+
+        return
+
+    def weather_section(self):
+
+        col1, col2 = st.columns(2, gap='small')
+        tile1 = col1.container(height=400)
+        tile2 = col2.container(height=400)
+        tile1.map(self.map_data, zoom=12, use_container_width=True)
+        with tile2:
+            upcoming_weather()
+
+def deeper_chart(data1,data2,cats):
+    range_ = ['#d4322c', "#f78d53", "#fed183", "#f9f7ae", "#cae986", "#84ca68", "#22964f"]
+    domain = ['Extremely Low', 'Atypically Low', 'Low Average', 'Average', 'High Average', 'Atypically High',
+              'Extremely High']
+    chart1 = alt.Chart(data1, title = f'{cats[0].capitalize()} Comparisons to Typical US Area').mark_bar().encode(
+    x = alt.X('SUBCATEGORY', axis=alt.Axis(labelLimit=200, labelAngle=-90)),
+    y = alt.Y('OUTLIER_SCORE', title='Relative Importance'),
+        color = alt.Color('CATEGORY_DESC',scale=alt.Scale(domain=domain, range=range_),
+                          legend=alt.Legend(orient="right"))).properties(
+        height=300)
+
+    chart2 = alt.Chart(data2, title = f'{cats[1].capitalize()} Comparisons to Typical US Area').mark_bar().encode(
+    x = alt.X('SUBCATEGORY', axis=alt.Axis(labelLimit=200, labelAngle=-90)),
+    y = alt.Y('OUTLIER_SCORE', title='Relative Importance'),
+        color = alt.Color('CATEGORY_DESC',scale=alt.Scale(domain=domain, range=range_))).properties(
+        height=300)
+    return alt.hconcat(chart1, chart2)
 
 def create_layout(location_instance):
     location_instance.top_text()
     location_instance.new_summary(f'''Hi, were you looking for me? I'm {location_instance.main_name}, and I live really close to
       {st.session_state['f_address']}! I'm personally a little obsessed with {location_instance.top_q_name}, which might be
-    unusual if you aren't from around here. {location_instance.people_summary}''')
+    unusual if you aren't from around here. The people here are more likely than in most U.S. areas to: ''')
+    location_instance.bullets()
     st.divider()
     mcol1, mcol2,mcol3 = st.columns(3,gap='medium')
     with mcol1:
@@ -141,31 +219,25 @@ def create_layout(location_instance):
     with mcol6:
         location_instance.add_metric('Average Household Size',round(location_instance.eps_w_main['HOUSEHOLD_SIZE'].iloc[0],1))
     st.divider()
-    st.write('Local Cultural Affinities')
+    st.subheader('People in my Neighborhood like:')
     location_instance.aff_frame()
-    exp_map = st.expander('On a map',expanded=True)
-    with exp_map:
-        exp_col1,exp_col2 = st.columns(2,gap='small')
-        exp_col1.map(location_instance.map_data, zoom=10, use_container_width=True)
-        with exp_col2:
-            upcoming_weather()
-#
+    location_instance.weather_section()
+
     st.subheader('Where else can I find more people like ' + location_instance.main_name + '?')
     st.divider()
-    st.altair_chart(location_instance.map_clusters(), use_container_width=True)
+
+    location_instance.map_clusters()
 
     exp_details = st.expander('Dive Deeper', expanded=False)
     with exp_details:
-        range_ = ['#d4322c', "#f78d53", "#fed183", "#f9f7ae", "#cae986", "#84ca68", "#22964f"]
-        domain = ['Extremely Low', 'Atypically Low', 'Low Average', 'Average', 'High Average', 'Atypically High',
-                  'Extremely High']
-        st.altair_chart(alt.Chart(location_instance.ep_rank_main[location_instance.ep_rank_main['CATEGORY']!='LANGUAGE'],title='Area Comparisons to Typical US Area').mark_bar().encode(
-            x=alt.X('SUBCATEGORY', axis=alt.Axis(labelLimit=200, labelAngle=-90)),
-            y=alt.Y('OUTLIER_SCORE',title='Relative Importance'),color=alt.Color('CATEGORY_DESC',
-                                                                                 scale=alt.Scale(domain=domain,range=range_),
-                                                                                 legend=alt.Legend(orient="top",title=None)),
-            facet=alt.Facet('CATEGORY',columns=3)
-        ).resolve_scale(x='independent'),use_container_width=False)
+
+        categories = [('AGE_GROUP','RELIGION'),('EDUCATION','WEATHER'),('ETHNIC_GROUP','DWELLING_TYPE'),
+                      ('INCOME','NET_WORTH')]
+        for each in categories:
+            ds1 = location_instance.ep_rank_main[location_instance.ep_rank_main['CATEGORY']==each[0]]
+            ds2 = location_instance.ep_rank_main[location_instance.ep_rank_main['CATEGORY']==each[1]]
+
+            st.altair_chart(deeper_chart(ds1,ds2,each),use_container_width=False)
 
 
 def upcoming_weather():
@@ -187,9 +259,7 @@ def execute():
     initial.connect(pd.DataFrame({'lat': [location['lat']], 'lon': [location['lng']]}))
     try:
         st.session_state['f_address'] = result[0]['formatted_address']
-       # st.write(result[0]['formatted_address'])
         st.session_state['zipcode'] = result[0]['formatted_address'].split(',')[-2].split(' ')[-1]
-
         create_layout(initial)
     except:
         pass
@@ -226,7 +296,7 @@ with top_container:
     search_function=search_address,
     placeholder="Enter an Address Here",
     label=None,
-    default="Selected",
+    default="",
     clear_on_submit=True,
     key="searchbox"))
 
